@@ -120,10 +120,33 @@ resource "aws_security_group" "web_sg" {
   }
 }
 
+
+variable "use_localstack" {
+  type    = bool
+  default = true
+}
+
+# Only fetch AMI from SSM on real AWS
+data "aws_ssm_parameter" "al2023_x86" {
+  count = var.use_localstack ? 0 : 1
+  name  = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
+}
+
+locals {
+  ami_id = var.use_localstack ? "ami-12345678" : data.aws_ssm_parameter.al2023_x86[0].value
+}
+
 resource "aws_instance" "web" {
-  ami                    = "ami-01cc34ab2709337aa"
+  ami                    = local.ami_id
   instance_type          = "t2.micro"
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.web_sg.id]
 }
+
+#resource "aws_instance" "web" {
+#  ami                    = "ami-01cc34ab2709337aa"
+#  instance_type          = "t2.micro"
+#  subnet_id              = aws_subnet.public.id
+#  vpc_security_group_ids = [aws_security_group.web_sg.id]
+#}
 

@@ -1,0 +1,14 @@
+
+services:
+  localstack:
+    image: localstack/localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=ec2,iam,s3,sts,cloudwatch,logs
+      - LOCALSTACK_PERSISTENCE=1       # enable persistence
+      # (older versions used DATA_DIR=/var/lib/localstack)
+    volumes:
+      - "localstack_data:/var/lib/localstack"  # persist state across restarts
+volumes:
+  localstack_data:

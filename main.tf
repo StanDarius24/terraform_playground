@@ -1,121 +1,129 @@
-
 terraform {
   required_providers {
     aws = {
-      source = "hashicorp/aws"
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
     }
   }
 }
 
-#Retrieve the list of AZs in the current AWS region
-data "aws_availability_zones" "available" {}
-data "aws_region" "current" {}
+# Create a VPC
+resource "aws_vpc" "demoVps" {
+  cidr_block = "10.0.0.0/16"
 
-#Define the VPC
-resource "aws_vpc" "vpc" {
-  cidr_block = var.vpc_cidr
+  enable_dns_support   = true # Allow DNS lookups inside VPC
+  enable_dns_hostnames = true # Give instances public DNS names if they have public IPs
+}
+
+# Subnet Public config
+resource "aws_subnet" "public" {
+  vpc_id     = aws_vpc.demoVps.id
+  cidr_block = "10.0.1.0/24"
+
+  map_public_ip_on_launch = true # Assign ip ipv4 at launch
 
   tags = {
-    Name        = var.vpc_name
-    Environment = "demo_environment"
-    Terraform   = "true"
+    Name = "public"
   }
 }
 
-#Deploy the private subnets
-resource "aws_subnet" "private_subnets" {
-  for_each          = var.private_subnets
-  vpc_id            = aws_vpc.vpc.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, each.value)
-  availability_zone = tolist(data.aws_availability_zones.available.names)[each.value]
+resource "aws_internet_gateway" "igw" { # internate gateway enables the connection to the internet
+  vpc_id = aws_vpc.demoVps.id
 
   tags = {
-    Name      = each.key
-    Terraform = "true"
+    Name = "main"
   }
 }
 
-#Deploy the public subnets
-resource "aws_subnet" "public_subnets" {
-  for_each                = var.public_subnets
-  vpc_id                  = aws_vpc.vpc.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 8, each.value + 100)
-  availability_zone       = tolist(data.aws_availability_zones.available.names)[each.value]
-  map_public_ip_on_launch = true
+output "vpc_id" { value = aws_vpc.demoVps.id }
+output "public_subnet_id" { value = aws_subnet.public.id }
+output "private_subnet_id" { value = aws_subnet.private.id }
 
-  tags = {
-    Name      = each.key
-    Terraform = "true"
-  }
-}
 
-#Create route tables for public and private subnets
-resource "aws_route_table" "public_route_table" {
-  vpc_id = aws_vpc.vpc.id
-
+# Public route table → IGW
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.demoVps.id
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.internet_gateway.id
-    #nat_gateway_id = aws_nat_gateway.nat_gateway.id
+    gateway_id = aws_internet_gateway.igw.id
   }
+  tags = { Name = "public-rt" }
+}
+
+resource "aws_route_table_association" "public_assoc" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+# NAT Gateway (must be in a public subnet + Elastic IP)
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags   = { Name = "nat-eip" }
+}
+
+resource "aws_nat_gateway" "nat" {
+  subnet_id     = aws_subnet.public.id
+  allocation_id = aws_eip.nat.id
+  tags          = { Name = "demo-nat" }
+}
+
+# Subnet Private Config
+resource "aws_subnet" "private" {
+  vpc_id     = aws_vpc.demoVps.id
+  cidr_block = "10.0.2.0/24"
+
+  # availability_zone = "eu-central-1"
+
   tags = {
-    Name      = "demo_public_rtb"
-    Terraform = "true"
+    Name = "private"
   }
 }
 
-resource "aws_route_table" "private_route_table" {
-  vpc_id = aws_vpc.vpc.id
-
+# Private route table → NAT
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.demoVps.id
   route {
-    cidr_block = "0.0.0.0/0"
-    # gateway_id     = aws_internet_gateway.internet_gateway.id
-    nat_gateway_id = aws_nat_gateway.nat_gateway.id
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
   }
-  tags = {
-    Name      = "demo_private_rtb"
-    Terraform = "true"
+  tags = { Name = "private-rt" }
+}
+
+resource "aws_route_table_association" "private_assoc" {
+  subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.private.id
+}
+
+resource "aws_security_group" "web_sg" {
+  name   = "web-sg"
+  vpc_id = aws_vpc.demoVps.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
   }
-}
 
-#Create route table associations
-resource "aws_route_table_association" "public" {
-  depends_on     = [aws_subnet.public_subnets]
-  route_table_id = aws_route_table.public_route_table.id
-  for_each       = aws_subnet.public_subnets
-  subnet_id      = each.value.id
-}
-
-resource "aws_route_table_association" "private" {
-  depends_on     = [aws_subnet.private_subnets]
-  route_table_id = aws_route_table.private_route_table.id
-  for_each       = aws_subnet.private_subnets
-  subnet_id      = each.value.id
-}
-
-#Create Internet Gateway
-resource "aws_internet_gateway" "internet_gateway" {
-  vpc_id = aws_vpc.vpc.id
-  tags = {
-    Name = "demo_igw"
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-}
 
-#Create EIP for NAT Gateway
-resource "aws_eip" "nat_gateway_eip" {
-  domain     = "vpc"
-  depends_on = [aws_internet_gateway.internet_gateway]
-  tags = {
-    Name = "demo_igw_eip"
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-#Create NAT Gateway
-resource "aws_nat_gateway" "nat_gateway" {
-  depends_on    = [aws_subnet.public_subnets]
-  allocation_id = aws_eip.nat_gateway_eip.id
-  subnet_id     = aws_subnet.public_subnets["public_subnet_1"].id
-  tags = {
-    Name = "demo_nat_gateway"
-  }
+resource "aws_instance" "web" {
+  ami                    = "ami-01cc34ab2709337aa"
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.public.id
+  vpc_security_group_ids = [aws_security_group.web_sg.id]
 }
+

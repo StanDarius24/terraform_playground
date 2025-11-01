@@ -1,4 +1,4 @@
-HASICORP CERTIFICATION CONFIG   
+HASICORP CERTIFICATION CONFIG
 
 ===
 
@@ -8,7 +8,7 @@ docker pull localstack/localstack
 
 alias aws-local='aws --endpoint-url=http://127.0.0.1:4566'
 
-now everytime when you want to use aws-cli, use aws-local to mock responses from aws 
+now everytime when you want to use aws-cli, use aws-local to mock responses from aws
 
 you might also need this config in `provider.tf`
 
